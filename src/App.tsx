@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import { Chess } from "chess.js";
 import { Chessboard } from "react-chessboard";
 
@@ -45,7 +45,6 @@ type EngineInfo = {
 function createEngine() {
   const code = `
     let engine;
-    let latestId = 0;
 
     function send(cmd){ engine.postMessage(cmd); }
 
@@ -81,7 +80,6 @@ function createEngine() {
       }
 
       if(msg.type === 'eval'){
-        latestId++;
         send('position fen ' + msg.fen);
         send('go depth ' + msg.depth);
       }
@@ -120,11 +118,6 @@ function labelFromCpLoss(loss: number): MoveLabel {
   return "Blunder";
 }
 
-function cpToLabel(cp: number | null): number {
-  if (cp === null) return 0;
-  return cp;
-}
-
 /**
  * =========================
  * App
@@ -142,7 +135,7 @@ export default function App() {
   const [depth] = useState(14);
 
   /**
-   * Engine init
+   * Init engine
    */
   useEffect(() => {
     const w = createEngine();
@@ -169,7 +162,7 @@ export default function App() {
   }, []);
 
   /**
-   * Evaluate position
+   * Async engine evaluation
    */
   function evalPosition(fen: string) {
     return new Promise<number>((resolve) => {
@@ -177,7 +170,6 @@ export default function App() {
 
       const handler = (e: MessageEvent<any>) => {
         if (e.data.type === "info" && e.data.score != null) {
-          engineRef.current?.removeEventListener("message", handler as any);
           resolve(e.data.score);
         }
       };
@@ -195,29 +187,26 @@ export default function App() {
   }
 
   /**
-   * Make move with full analysis
+   * Async analysis (NOT responsible for move validity)
    */
-  async function makeMove(from: string, to: string) {
+  async function analyzeMove(from: string, to: string) {
     const game = gameRef.current;
 
     const fenBefore = game.fen();
-
     const evalBefore = await evalPosition(fenBefore);
 
-    const move = game.move({ from, to, promotion: "q" });
-    if (!move) return false;
-
     const fenAfter = game.fen();
-
     const evalAfter = await evalPosition(fenAfter);
 
     const cpLoss = Math.abs(evalBefore - evalAfter);
 
+    const moveObj = game.history({ verbose: true }).slice(-1)[0];
+
     const annotation: MoveAnnotation = {
-      san: move.san,
+      san: moveObj.san,
       from,
       to,
-      color: move.color,
+      color: moveObj.color,
       fenBefore,
       fenAfter,
       evalBefore,
@@ -227,7 +216,26 @@ export default function App() {
     };
 
     setMoves((m) => [...m, annotation]);
-    setFen(fenAfter);
+  }
+
+  /**
+   * FIXED MOVE HANDLER (SYNC ONLY)
+   */
+  function onPieceDrop(from: string, to: string) {
+    const game = gameRef.current;
+
+    const move = game.move({
+      from,
+      to,
+      promotion: "q",
+    });
+
+    if (!move) return false;
+
+    setFen(game.fen());
+
+    // async analysis in background
+    void analyzeMove(from, to);
 
     return true;
   }
@@ -238,8 +246,8 @@ export default function App() {
   function undo() {
     const game = gameRef.current;
     game.undo();
-    setMoves((m) => m.slice(0, -1));
     setFen(game.fen());
+    setMoves((m) => m.slice(0, -1));
   }
 
   /**
@@ -248,22 +256,13 @@ export default function App() {
   function reset() {
     const g = new Chess();
     gameRef.current = g;
-    setMoves([]);
     setFen(g.fen());
+    setMoves([]);
     setBestMove("");
   }
 
   /**
-   * Evaluation display
-   */
-  function evalText() {
-    const cp = analysis.score ?? 0;
-    const v = cp / 100;
-    return v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2);
-  }
-
-  /**
-   * Accuracy summary
+   * Accuracy
    */
   const accuracy = useMemo(() => {
     if (moves.length === 0) return 100;
@@ -274,13 +273,20 @@ export default function App() {
   }, [moves]);
 
   /**
-   * UI
+   * Eval display
    */
+  function evalText() {
+    const cp = analysis.score ?? 0;
+    const v = cp / 100;
+    return v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2);
+  }
+
   return (
     <div className="min-h-screen bg-zinc-950 text-white flex flex-col">
       {/* Top bar */}
       <div className="flex justify-between p-3 border-b border-zinc-800">
         <div className="font-bold">Chess Coach Pro</div>
+
         <div className="flex gap-3 text-sm">
           <button onClick={undo}>Undo</button>
           <button onClick={reset}>Reset</button>
@@ -291,37 +297,27 @@ export default function App() {
         {/* Board */}
         <div className="flex-1 flex items-center justify-center p-4">
           <div className="w-[420px]">
-            <Chessboard
-              position={fen}
-              onPieceDrop={(f, t) => makeMove(f, t)}
-            />
+            <Chessboard position={fen} onPieceDrop={onPieceDrop} />
           </div>
         </div>
 
         {/* Sidebar */}
         <div className="w-full md:w-[380px] border-l border-zinc-800 p-4 space-y-4">
-          {/* Eval */}
           <div className="bg-zinc-900 p-3 rounded">
             <div className="text-sm text-zinc-400">Evaluation</div>
             <div className="text-xl">{evalText()}</div>
-            <div className="text-xs text-zinc-500">
-              Depth {analysis.depth}
-            </div>
           </div>
 
-          {/* Accuracy */}
           <div className="bg-zinc-900 p-3 rounded">
             <div className="text-sm text-zinc-400">Accuracy</div>
             <div className="text-xl">{accuracy}%</div>
           </div>
 
-          {/* Best move */}
           <div className="bg-zinc-900 p-3 rounded">
             <div className="text-sm text-zinc-400">Best Move</div>
-            <div className="text-lg">{bestMove || "—"}</div>
+            <div>{bestMove || "—"}</div>
           </div>
 
-          {/* Moves */}
           <div className="bg-zinc-900 p-3 rounded max-h-[300px] overflow-auto">
             <div className="text-sm text-zinc-400 mb-2">Moves</div>
             <div className="text-xs space-y-1">
@@ -336,7 +332,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* PV */}
           <div className="bg-zinc-900 p-3 rounded">
             <div className="text-sm text-zinc-400">PV</div>
             <div className="text-xs text-zinc-300">

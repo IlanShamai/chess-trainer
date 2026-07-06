@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
-import { Chess } from "chess.js";
+import { Chess, type Square } from "chess.js";
 import { Chessboard } from "react-chessboard";
 
 /**
@@ -218,11 +218,66 @@ export default function App() {
     setMoves((m) => [...m, annotation]);
   }
 
-  /**
-   * FIXED MOVE HANDLER (SYNC ONLY)
-   */
+  function setTurnForColor(color: "w" | "b") {
+    const game = gameRef.current;
+    const fenParts = game.fen().split(" ");
+    if (fenParts.length < 2) return;
+
+    fenParts[1] = color;
+    game.load(fenParts.join(" "));
+  }
+
+  function requestEngineMove(fen: string) {
+    return new Promise<string | null>((resolve) => {
+      const worker = engineRef.current;
+      if (!worker) return resolve(null);
+
+      const handler = (event: MessageEvent<any>) => {
+        if (event.data.type === "bestMove") {
+          worker.removeEventListener("message", handler as EventListener);
+          resolve(event.data.move);
+        }
+      };
+
+      worker.addEventListener("message", handler as EventListener);
+      worker.postMessage({ type: "eval", fen, depth });
+    });
+  }
+
+  async function playBotMove(color: "w" | "b") {
+    const game = gameRef.current;
+
+    if (game.isGameOver()) return;
+
+    setTurnForColor(color);
+
+    const move = await requestEngineMove(game.fen());
+    if (!move || move === "(none)") return;
+
+    const parsedMove = game.move({
+      from: move.slice(0, 2),
+      to: move.slice(2, 4),
+      promotion: move.length === 5 ? (move[4] as "q" | "r" | "b" | "n") : "q",
+    });
+
+    if (!parsedMove) return;
+
+    setFen(game.fen());
+    setBestMove(move);
+    void analyzeMove(parsedMove.from, parsedMove.to);
+  }
+
   function onPieceDrop(from: string, to: string) {
     const game = gameRef.current;
+    const piece = game.get(from as Square);
+
+    if (!piece) return false;
+
+    const color = piece.color as "w" | "b";
+
+    if (game.turn() !== color) {
+      setTurnForColor(color);
+    }
 
     const move = game.move({
       from,
@@ -233,9 +288,12 @@ export default function App() {
     if (!move) return false;
 
     setFen(game.fen());
-
-    // async analysis in background
+    setBestMove("");
     void analyzeMove(from, to);
+
+    if (!game.isGameOver()) {
+      void playBotMove(color === "w" ? "b" : "w");
+    }
 
     return true;
   }

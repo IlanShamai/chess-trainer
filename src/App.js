@@ -162,11 +162,66 @@ export default function App() {
         };
         setMoves((m) => [...m, annotation]);
     }
-    /**
-     * FIXED MOVE HANDLER (SYNC ONLY)
-     */
+    function setTurnForColor(color) {
+        const game = gameRef.current;
+        const fenParts = game.fen().split(" ");
+        if (fenParts.length < 2)
+            return;
+        fenParts[1] = color;
+        game.load(fenParts.join(" "));
+    }
+    function requestEngineMove(fen) {
+        return new Promise((resolve) => {
+            const worker = engineRef.current;
+            if (!worker)
+                return resolve(null);
+            const handler = (event) => {
+                if (event.data.type === "bestMove") {
+                    worker.removeEventListener("message", handler);
+                    resolve(event.data.move);
+                }
+            };
+            worker.addEventListener("message", handler);
+            worker.postMessage({ type: "eval", fen, depth });
+        });
+    }
+    async function playBotMove(color) {
+        const game = gameRef.current;
+        if (game.isGameOver())
+            return;
+        setTurnForColor(color);
+        const move = await requestEngineMove(game.fen());
+        if (!move || move === "(none)")
+            return;
+        const parsedMove = game.move({
+            from: move.slice(0, 2),
+            to: move.slice(2, 4),
+            promotion: move.length === 5 ? move[4] : "q",
+        });
+        if (!parsedMove)
+            return;
+        setFen(game.fen());
+        setBestMove(move);
+        void analyzeMove(parsedMove.from, parsedMove.to);
+    }
+    async function showHint() {
+        const game = gameRef.current;
+        if (game.isGameOver())
+            return;
+        const move = await requestEngineMove(game.fen());
+        if (!move || move === "(none)")
+            return;
+        setBestMove(move);
+    }
     function onPieceDrop(from, to) {
         const game = gameRef.current;
+        const piece = game.get(from);
+        if (!piece)
+            return false;
+        const color = piece.color;
+        if (game.turn() !== color) {
+            setTurnForColor(color);
+        }
         const move = game.move({
             from,
             to,
@@ -175,8 +230,11 @@ export default function App() {
         if (!move)
             return false;
         setFen(game.fen());
-        // async analysis in background
+        setBestMove("");
         void analyzeMove(from, to);
+        if (!game.isGameOver()) {
+            void playBotMove(color === "w" ? "b" : "w");
+        }
         return true;
     }
     /**
@@ -215,5 +273,5 @@ export default function App() {
         const v = cp / 100;
         return v > 0 ? `+${v.toFixed(2)}` : v.toFixed(2);
     }
-    return (_jsxs("div", { className: "min-h-screen bg-zinc-950 text-white flex flex-col", children: [_jsxs("div", { className: "flex justify-between p-3 border-b border-zinc-800", children: [_jsx("div", { className: "font-bold", children: "Chess Coach Pro" }), _jsxs("div", { className: "flex gap-3 text-sm", children: [_jsx("button", { onClick: undo, children: "Undo" }), _jsx("button", { onClick: reset, children: "Reset" })] })] }), _jsxs("div", { className: "flex flex-col md:flex-row flex-1", children: [_jsx("div", { className: "flex-1 flex items-center justify-center p-4", children: _jsx("div", { className: "w-[420px]", children: _jsx(Chessboard, { position: fen, onPieceDrop: onPieceDrop }) }) }), _jsxs("div", { className: "w-full md:w-[380px] border-l border-zinc-800 p-4 space-y-4", children: [_jsxs("div", { className: "bg-zinc-900 p-3 rounded", children: [_jsx("div", { className: "text-sm text-zinc-400", children: "Evaluation" }), _jsx("div", { className: "text-xl", children: evalText() })] }), _jsxs("div", { className: "bg-zinc-900 p-3 rounded", children: [_jsx("div", { className: "text-sm text-zinc-400", children: "Accuracy" }), _jsxs("div", { className: "text-xl", children: [accuracy, "%"] })] }), _jsxs("div", { className: "bg-zinc-900 p-3 rounded", children: [_jsx("div", { className: "text-sm text-zinc-400", children: "Best Move" }), _jsx("div", { children: bestMove || "—" })] }), _jsxs("div", { className: "bg-zinc-900 p-3 rounded max-h-[300px] overflow-auto", children: [_jsx("div", { className: "text-sm text-zinc-400 mb-2", children: "Moves" }), _jsx("div", { className: "text-xs space-y-1", children: moves.map((m, i) => (_jsxs("div", { className: "flex justify-between", children: [_jsxs("span", { children: [i + 1, ". ", m.san] }), _jsx("span", { className: "text-zinc-400", children: m.label })] }, i))) })] }), _jsxs("div", { className: "bg-zinc-900 p-3 rounded", children: [_jsx("div", { className: "text-sm text-zinc-400", children: "PV" }), _jsx("div", { className: "text-xs text-zinc-300", children: analysis.pv || "—" })] })] })] })] }));
+    return (_jsxs("div", { className: "min-h-screen bg-zinc-950 text-white flex flex-col", children: [_jsxs("div", { className: "flex justify-between p-3 border-b border-zinc-800", children: [_jsx("div", { className: "font-bold", children: "Chess Coach Pro" }), _jsxs("div", { className: "flex gap-3 text-sm", children: [_jsx("button", { onClick: showHint, children: "Hint" }), _jsx("button", { onClick: undo, children: "Undo" }), _jsx("button", { onClick: reset, children: "Reset" })] })] }), _jsxs("div", { className: "flex flex-col md:flex-row flex-1", children: [_jsx("div", { className: "flex-1 flex items-center justify-center p-4", children: _jsx("div", { className: "w-[420px]", children: _jsx(Chessboard, { position: fen, onPieceDrop: onPieceDrop }) }) }), _jsxs("div", { className: "w-full md:w-[380px] border-l border-zinc-800 p-4 space-y-4", children: [_jsxs("div", { className: "bg-zinc-900 p-3 rounded", children: [_jsx("div", { className: "text-sm text-zinc-400", children: "Evaluation" }), _jsx("div", { className: "text-xl", children: evalText() })] }), _jsxs("div", { className: "bg-zinc-900 p-3 rounded", children: [_jsx("div", { className: "text-sm text-zinc-400", children: "Accuracy" }), _jsxs("div", { className: "text-xl", children: [accuracy, "%"] })] }), _jsxs("div", { className: "bg-zinc-900 p-3 rounded", children: [_jsx("div", { className: "text-sm text-zinc-400", children: "Best Move" }), _jsx("div", { children: bestMove || "—" })] }), _jsxs("div", { className: "bg-zinc-900 p-3 rounded max-h-[300px] overflow-auto", children: [_jsx("div", { className: "text-sm text-zinc-400 mb-2", children: "Moves" }), _jsx("div", { className: "text-xs space-y-1", children: moves.map((m, i) => (_jsxs("div", { className: "flex justify-between", children: [_jsxs("span", { children: [i + 1, ". ", m.san] }), _jsx("span", { className: "text-zinc-400", children: m.label })] }, i))) })] }), _jsxs("div", { className: "bg-zinc-900 p-3 rounded", children: [_jsx("div", { className: "text-sm text-zinc-400", children: "PV" }), _jsx("div", { className: "text-xs text-zinc-300", children: analysis.pv || "—" })] })] })] })] }));
 }

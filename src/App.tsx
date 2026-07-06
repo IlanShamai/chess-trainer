@@ -267,6 +267,16 @@ export default function App() {
     void analyzeMove(parsedMove.from, parsedMove.to);
   }
 
+  async function showHint() {
+    const game = gameRef.current;
+    if (game.isGameOver()) return;
+
+    const move = await requestEngineMove(game.fen());
+    if (!move || move === "(none)") return;
+
+    setBestMove(move);
+  }
+
   function onPieceDrop(from: string, to: string) {
     const game = gameRef.current;
     const piece = game.get(from as Square);
@@ -346,6 +356,7 @@ export default function App() {
         <div className="font-bold">Chess Coach Pro</div>
 
         <div className="flex gap-3 text-sm">
+          <button onClick={showHint}>Hint</button>
           <button onClick={undo}>Undo</button>
           <button onClick={reset}>Reset</button>
         </div>

@@ -41,8 +41,14 @@ type BotLevel = "easy" | "medium" | "hard";
 
 const levelToDepth: Record<BotLevel, number> = {
   easy: 8,
-  medium: 12,
-  hard: 16,
+  medium: 10,
+  hard: 12,
+};
+
+const levelToMoveTime: Record<BotLevel, number> = {
+  easy: 220,
+  medium: 450,
+  hard: 800,
 };
 
 /**
@@ -90,7 +96,11 @@ function createEngine() {
 
       if(msg.type === 'eval'){
         send('position fen ' + msg.fen);
-        send('go depth ' + msg.depth);
+        if(msg.moveTime != null){
+          send('go movetime ' + msg.moveTime);
+        } else {
+          send('go depth ' + msg.depth);
+        }
       }
 
       if(msg.type === 'stop'){
@@ -147,6 +157,7 @@ export default function App() {
   const [botThinking, setBotThinking] = useState(false);
 
   const depth = useMemo(() => levelToDepth[botLevel], [botLevel]);
+  const moveTime = useMemo(() => levelToMoveTime[botLevel], [botLevel]);
 
   /**
    * Init engine
@@ -245,7 +256,7 @@ export default function App() {
       };
 
       worker.addEventListener("message", handler as EventListener);
-      worker.postMessage({ type: "eval", fen, depth });
+      worker.postMessage({ type: "eval", fen, moveTime });
     });
   }
 
@@ -416,7 +427,19 @@ export default function App() {
 
             <div className="flex justify-center rounded-2xl bg-zinc-950/70 p-2">
               <div className="w-full max-w-[480px]">
-                <Chessboard position={fen} onPieceDrop={onPieceDrop} boardWidth={420} />
+                <Chessboard
+                  position={fen}
+                  onPieceDrop={onPieceDrop}
+                  boardWidth={420}
+                  customBoardStyle={{
+                    borderRadius: "24px",
+                    boxShadow: "0 24px 50px rgba(0, 0, 0, 0.35)",
+                    overflow: "hidden",
+                    border: "1px solid rgba(255,255,255,0.08)",
+                  }}
+                  customLightSquareStyle={{ backgroundColor: "#f1d9b5" }}
+                  customDarkSquareStyle={{ backgroundColor: "#8b5e3c" }}
+                />
               </div>
             </div>
           </div>

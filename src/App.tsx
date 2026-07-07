@@ -36,6 +36,15 @@ type EngineInfo = {
   pv?: string;
 };
 
+type PlayerColor = "w" | "b";
+type BotLevel = "easy" | "medium" | "hard";
+
+const levelToDepth: Record<BotLevel, number> = {
+  easy: 8,
+  medium: 12,
+  hard: 16,
+};
+
 /**
  * =========================
  * Stockfish Worker
@@ -132,7 +141,12 @@ export default function App() {
   const [moves, setMoves] = useState<MoveAnnotation[]>([]);
   const [analysis, setAnalysis] = useState<EngineInfo>({});
   const [bestMove, setBestMove] = useState("");
-  const [depth] = useState(14);
+  const [playerColor, setPlayerColor] = useState<PlayerColor>("w");
+  const [botLevel, setBotLevel] = useState<BotLevel>("medium");
+  const [statusText, setStatusText] = useState("Your turn");
+  const [botThinking, setBotThinking] = useState(false);
+
+  const depth = useMemo(() => levelToDepth[botLevel], [botLevel]);
 
   /**
    * Init engine
@@ -218,15 +232,6 @@ export default function App() {
     setMoves((m) => [...m, annotation]);
   }
 
-  function setTurnForColor(color: "w" | "b") {
-    const game = gameRef.current;
-    const fenParts = game.fen().split(" ");
-    if (fenParts.length < 2) return;
-
-    fenParts[1] = color;
-    game.load(fenParts.join(" "));
-  }
-
   function requestEngineMove(fen: string) {
     return new Promise<string | null>((resolve) => {
       const worker = engineRef.current;
@@ -244,15 +249,21 @@ export default function App() {
     });
   }
 
-  async function playBotMove(color: "w" | "b") {
+  async function playBotMove(color: PlayerColor) {
     const game = gameRef.current;
 
-    if (game.isGameOver()) return;
+    if (game.isGameOver() || game.turn() !== color) return;
 
-    setTurnForColor(color);
+    setBotThinking(true);
+    setStatusText("Bot is thinking...");
 
     const move = await requestEngineMove(game.fen());
-    if (!move || move === "(none)") return;
+    setBotThinking(false);
+
+    if (!move || move === "(none)") {
+      setStatusText("Your turn");
+      return;
+    }
 
     const parsedMove = game.move({
       from: move.slice(0, 2),
@@ -260,11 +271,15 @@ export default function App() {
       promotion: move.length === 5 ? (move[4] as "q" | "r" | "b" | "n") : "q",
     });
 
-    if (!parsedMove) return;
+    if (!parsedMove) {
+      setStatusText("Your turn");
+      return;
+    }
 
     setFen(game.fen());
     setBestMove(move);
     void analyzeMove(parsedMove.from, parsedMove.to);
+    setStatusText(game.isGameOver() ? "Game over" : "Your turn");
   }
 
   async function showHint() {
@@ -275,19 +290,15 @@ export default function App() {
     if (!move || move === "(none)") return;
 
     setBestMove(move);
+    setStatusText("Hint ready");
   }
 
   function onPieceDrop(from: string, to: string) {
     const game = gameRef.current;
     const piece = game.get(from as Square);
 
-    if (!piece) return false;
-
-    const color = piece.color as "w" | "b";
-
-    if (game.turn() !== color) {
-      setTurnForColor(color);
-    }
+    if (!piece || botThinking) return false;
+    if (piece.color !== playerColor || game.turn() !== playerColor) return false;
 
     const move = game.move({
       from,
@@ -299,10 +310,13 @@ export default function App() {
 
     setFen(game.fen());
     setBestMove("");
+    setStatusText("Bot is thinking...");
     void analyzeMove(from, to);
 
-    if (!game.isGameOver()) {
-      void playBotMove(color === "w" ? "b" : "w");
+    if (!game.isGameOver() && game.turn() === (playerColor === "w" ? "b" : "w")) {
+      void playBotMove(playerColor === "w" ? "b" : "w");
+    } else {
+      setStatusText(game.isGameOver() ? "Game over" : "Your turn");
     }
 
     return true;
@@ -327,6 +341,9 @@ export default function App() {
     setFen(g.fen());
     setMoves([]);
     setBestMove("");
+    setAnalysis({});
+    setBotThinking(false);
+    setStatusText("Your turn");
   }
 
   /**
@@ -350,61 +367,136 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white flex flex-col">
-      {/* Top bar */}
-      <div className="flex justify-between p-3 border-b border-zinc-800">
-        <div className="font-bold">Chess Coach Pro</div>
-
-        <div className="flex gap-3 text-sm">
-          <button onClick={showHint}>Hint</button>
-          <button onClick={undo}>Undo</button>
-          <button onClick={reset}>Reset</button>
-        </div>
-      </div>
-
-      <div className="flex flex-col md:flex-row flex-1">
-        {/* Board */}
-        <div className="flex-1 flex items-center justify-center p-4">
-          <div className="w-[420px]">
-            <Chessboard position={fen} onPieceDrop={onPieceDrop} />
-          </div>
-        </div>
-
-        {/* Sidebar */}
-        <div className="w-full md:w-[380px] border-l border-zinc-800 p-4 space-y-4">
-          <div className="bg-zinc-900 p-3 rounded">
-            <div className="text-sm text-zinc-400">Evaluation</div>
-            <div className="text-xl">{evalText()}</div>
-          </div>
-
-          <div className="bg-zinc-900 p-3 rounded">
-            <div className="text-sm text-zinc-400">Accuracy</div>
-            <div className="text-xl">{accuracy}%</div>
-          </div>
-
-          <div className="bg-zinc-900 p-3 rounded">
-            <div className="text-sm text-zinc-400">Best Move</div>
-            <div>{bestMove || "—"}</div>
-          </div>
-
-          <div className="bg-zinc-900 p-3 rounded max-h-[300px] overflow-auto">
-            <div className="text-sm text-zinc-400 mb-2">Moves</div>
-            <div className="text-xs space-y-1">
-              {moves.map((m, i) => (
-                <div key={i} className="flex justify-between">
-                  <span>
-                    {i + 1}. {m.san}
-                  </span>
-                  <span className="text-zinc-400">{m.label}</span>
-                </div>
-              ))}
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.15),_transparent_40%),linear-gradient(135deg,_#09090b,_#111827)] text-white">
+      <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-4 sm:px-6 lg:px-8">
+        <header className="mb-4 flex flex-col gap-3 rounded-3xl border border-zinc-800/80 bg-zinc-900/70 p-4 shadow-2xl backdrop-blur md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-xl font-semibold">Chess Coach Pro</div>
+            <div className="text-sm text-zinc-400">
+              Play against a bot, get hints, and sharpen your game.
             </div>
           </div>
 
-          <div className="bg-zinc-900 p-3 rounded">
-            <div className="text-sm text-zinc-400">PV</div>
-            <div className="text-xs text-zinc-300">
-              {analysis.pv || "—"}
+          <div className="flex flex-wrap gap-2 text-sm">
+            <button
+              type="button"
+              onClick={showHint}
+              className="rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-2 text-sky-200 transition hover:bg-sky-500/20"
+            >
+              Hint
+            </button>
+            <button
+              type="button"
+              onClick={undo}
+              className="rounded-full border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-200 transition hover:bg-zinc-700"
+            >
+              Undo
+            </button>
+            <button
+              type="button"
+              onClick={reset}
+              className="rounded-full border border-zinc-700 bg-zinc-800 px-3 py-2 text-zinc-200 transition hover:bg-zinc-700"
+            >
+              Reset
+            </button>
+          </div>
+        </header>
+
+        <div className="grid flex-1 gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+          <div className="rounded-3xl border border-zinc-800/80 bg-zinc-900/70 p-3 shadow-2xl backdrop-blur">
+            <div className="mb-3 flex items-center justify-between rounded-2xl bg-zinc-800/70 px-3 py-2">
+              <div>
+                <div className="text-sm text-zinc-400">Trainer status</div>
+                <div className="font-medium">{statusText}</div>
+              </div>
+              <div className="rounded-full bg-emerald-500/15 px-3 py-1 text-sm text-emerald-300">
+                {botThinking ? "Bot thinking..." : "Live training"}
+              </div>
+            </div>
+
+            <div className="flex justify-center rounded-2xl bg-zinc-950/70 p-2">
+              <div className="w-full max-w-[480px]">
+                <Chessboard position={fen} onPieceDrop={onPieceDrop} boardWidth={420} />
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-3xl border border-zinc-800/80 bg-zinc-900/70 p-4 shadow-2xl backdrop-blur">
+              <div className="mb-3 text-sm text-zinc-400">Trainer setup</div>
+              <div className="space-y-3">
+                <div>
+                  <div className="mb-2 text-sm font-medium">Play as</div>
+                  <div className="flex gap-2">
+                    {(["w", "b"] as PlayerColor[]).map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        onClick={() => setPlayerColor(color)}
+                        className={`rounded-full px-3 py-2 text-sm transition ${
+                          playerColor === color
+                            ? "bg-sky-500 text-white"
+                            : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                        }`}
+                      >
+                        {color === "w" ? "White" : "Black"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium" htmlFor="level">
+                    Bot level
+                  </label>
+                  <select
+                    id="level"
+                    value={botLevel}
+                    onChange={(event) => setBotLevel(event.target.value as BotLevel)}
+                    className="w-full rounded-2xl border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 outline-none"
+                  >
+                    <option value="easy">Easy</option>
+                    <option value="medium">Medium</option>
+                    <option value="hard">Hard</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+              <div className="rounded-3xl border border-zinc-800/80 bg-zinc-900/70 p-4 shadow-2xl backdrop-blur">
+                <div className="text-sm text-zinc-400">Evaluation</div>
+                <div className="mt-1 text-2xl font-semibold">{evalText()}</div>
+              </div>
+
+              <div className="rounded-3xl border border-zinc-800/80 bg-zinc-900/70 p-4 shadow-2xl backdrop-blur">
+                <div className="text-sm text-zinc-400">Accuracy</div>
+                <div className="mt-1 text-2xl font-semibold">{accuracy}%</div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-zinc-800/80 bg-zinc-900/70 p-4 shadow-2xl backdrop-blur">
+              <div className="mb-2 text-sm text-zinc-400">Best move</div>
+              <div className="text-sm text-zinc-200">{bestMove || "—"}</div>
+            </div>
+
+            <div className="rounded-3xl border border-zinc-800/80 bg-zinc-900/70 p-4 shadow-2xl backdrop-blur">
+              <div className="mb-2 text-sm text-zinc-400">Recent moves</div>
+              <div className="max-h-[240px] space-y-1 overflow-auto text-xs">
+                {moves.map((m, i) => (
+                  <div key={i} className="flex items-center justify-between rounded-xl bg-zinc-800/70 px-2 py-1.5">
+                    <span>
+                      {i + 1}. {m.san}
+                    </span>
+                    <span className="text-zinc-400">{m.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-zinc-800/80 bg-zinc-900/70 p-4 shadow-2xl backdrop-blur">
+              <div className="mb-2 text-sm text-zinc-400">Variation</div>
+              <div className="text-xs text-zinc-300">{analysis.pv || "—"}</div>
             </div>
           </div>
         </div>
